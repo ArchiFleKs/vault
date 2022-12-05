@@ -34,6 +34,7 @@ import (
 	"github.com/hashicorp/go-secure-stdlib/strutil"
 	"github.com/hashicorp/go-secure-stdlib/tlsutil"
 	"github.com/hashicorp/go-uuid"
+	semver "github.com/hashicorp/go-version"
 	"github.com/hashicorp/vault/api"
 	"github.com/hashicorp/vault/audit"
 	"github.com/hashicorp/vault/command/server"
@@ -101,6 +102,10 @@ const (
 	// undoLogsAreSafeStoragePath is a storage path that we write once we know undo logs are
 	// safe, so we don't have to keep checking all the time.
 	undoLogsAreSafeStoragePath = "core/raft/undo_logs_are_safe"
+
+	// lastMountedVersionKey is used to look up the last successfully mounted
+	// version of Vault from the Version store and cache
+	lastMountedVersionKey = "last_mounted"
 )
 
 var (
@@ -146,6 +151,7 @@ var (
 	LicenseInitCheck             = func(*Core) error { return nil }
 	LicenseSummary               = func(*Core) (*LicenseState, error) { return nil, nil }
 	LicenseReload                = func(*Core) error { return nil }
+	isNonPatchUpdate             = false
 )
 
 // NonFatalError is an error that can be returned during NewCore that should be
@@ -638,7 +644,9 @@ type Core struct {
 	// was first run. Note that because perf standbys should be upgraded first, and
 	// only the active node will actually write the new version timestamp, a perf
 	// standby shouldn't rely on the stored version timestamps being present.
-	versionHistory map[string]VaultVersion
+	versionHistory       map[string]VaultVersion
+	currentVaultVersion  *VaultVersion
+	latestMountedVersion *VaultVersion
 
 	// effectiveSDKVersion contains the SDK version that standby nodes should use when
 	// heartbeating with the active node. Default to the current SDK version.
@@ -1192,13 +1200,13 @@ func NewCore(conf *CoreConfig) (*Core, error) {
 func (c *Core) handleVersionTimeStamps(ctx context.Context) error {
 	currentTime := time.Now().UTC()
 
-	vaultVersion := &VaultVersion{
+	c.currentVaultVersion = &VaultVersion{
 		TimestampInstalled: currentTime,
 		Version:            version.Version,
 		BuildDate:          version.BuildDate,
 	}
 
-	isUpdated, err := c.storeVersionEntry(ctx, vaultVersion, false)
+	isUpdated, err := c.storeVersionEntry(ctx, c.currentVaultVersion, false)
 	if err != nil {
 		return fmt.Errorf("error storing vault version: %w", err)
 	}
@@ -1209,6 +1217,36 @@ func (c *Core) handleVersionTimeStamps(ctx context.Context) error {
 	err = c.loadVersionHistory(ctx)
 	if err != nil {
 		return err
+	}
+
+	// Inform Vault of a non-patch (major or minor) version update for
+	// Deprecation handling purposes
+	if isUpdated {
+		lastMountedVersion, ok := c.versionHistory[lastMountedVersionKey]
+		if ok {
+			// Get versions into comparable form
+			curr, err := semver.NewSemver(c.currentVaultVersion.Version)
+			if err != nil {
+				return fmt.Errorf("could not determine update status: %w", err)
+			}
+			prev, err := semver.NewSemver(lastMountedVersion.Version)
+			if err != nil {
+				return fmt.Errorf("could not determine update status: %w", err)
+			}
+
+			// Check for major version upgrade
+			if curr.Segments()[0] > prev.Segments()[0] {
+				isNonPatchUpdate = true
+			}
+
+			// Check for minor version upgrade
+			if curr.Segments()[1] > prev.Segments()[1] {
+				isNonPatchUpdate = true
+			}
+		} else {
+			// First version in history, so technically an update
+			isNonPatchUpdate = true
+		}
 	}
 	return nil
 }
@@ -2204,6 +2242,11 @@ func (s standardUnsealStrategy) unseal(ctx context.Context, logger log.Logger, c
 		return err
 	}
 	if err := c.setupCredentials(ctx); err != nil {
+		return err
+	}
+	// After this point, we've mounted all deprecation-dependent mounts. We can
+	// store the current version as the latest upgrade version.
+	if err := c.storeMountedVersionEntry(ctx, c.currentVaultVersion); err != nil {
 		return err
 	}
 	if err := c.setupQuotas(ctx, false); err != nil {

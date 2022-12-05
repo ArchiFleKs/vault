@@ -66,6 +66,31 @@ func (c *Core) storeVersionEntry(ctx context.Context, vaultVersion *VaultVersion
 	return true, nil
 }
 
+// storeMountedVersionEntry writes the last version of Vault which successfully
+// unsealed and mounted to the version store. This is useful for keeping track
+// of handling of deprecated mounts. We should only update this after
+// successfully unsealing and mounting all entries. Deprecated mounts will fail
+// to unseal and will not record the Vaul version.
+func (c *Core) storeMountedVersionEntry(ctx context.Context, vaultVersion *VaultVersion) error {
+	key := vaultVersionPath + lastMountedVersionKey
+	if vaultVersion.TimestampInstalled.Location() != time.UTC {
+		vaultVersion.TimestampInstalled = vaultVersion.TimestampInstalled.UTC()
+	}
+
+	marshalledVaultVersion, err := json.Marshal(vaultVersion)
+	if err != nil {
+		return err
+	}
+	newEntry := &logical.StorageEntry{
+		Key:   key,
+		Value: marshalledVaultVersion,
+	}
+	if err := c.barrier.Put(ctx, newEntry); err != nil {
+		return fmt.Errorf("could not store latest mounted version: %w", err)
+	}
+	return nil
+}
+
 // FindOldestVersionTimestamp searches for the vault version with the oldest
 // upgrade timestamp from storage. The earliest version this can be is 1.9.0.
 func (c *Core) FindOldestVersionTimestamp() (string, time.Time, error) {

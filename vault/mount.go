@@ -970,7 +970,7 @@ func (c *Core) taintMountEntry(ctx context.Context, nsID, mountPath string, upda
 // * PendingRemoval - log an error about builtin deprecation and return an error
 // if VAULT_ALLOW_PENDING_REMOVAL_MOUNTS is unset
 // * Removed - log an error about builtin deprecation and return an error
-func (c *Core) handleDeprecatedMountEntry(ctx context.Context, entry *MountEntry, pluginType consts.PluginType) (*logical.Response, error) {
+func (c *Core) handleDeprecatedMountEntry(ctx context.Context, entry *MountEntry, pluginType consts.PluginType, shutdownOnErr bool) (*logical.Response, error) {
 	resp := &logical.Response{}
 
 	if c.builtinRegistry == nil || entry == nil {
@@ -1006,10 +1006,23 @@ func (c *Core) handleDeprecatedMountEntry(ctx context.Context, entry *MountEntry
 				resp.AddWarning(errMountPendingRemoval.Error())
 				return resp, nil
 			}
-			return nil, fmt.Errorf("could not mount %q: %w", t, errMountPendingRemoval)
-
+			err := fmt.Errorf("could not mount %q: %w", t, errMountPendingRemoval)
+			if shutdownOnErr {
+				c.Logger().Error("shutting down core", "error", err)
+				if shutdownErr := c.Shutdown(); shutdownErr != nil {
+					c.Logger().Error("failed to shutdown core", "error", shutdownErr)
+				}
+			}
+			return nil, err
 		case consts.Removed:
-			return nil, fmt.Errorf("could not mount %s: %w", t, errMountRemoved)
+			err := fmt.Errorf("could not mount %q: %w", t, errMountRemoved)
+			if shutdownOnErr {
+				c.Logger().Error("shutting down core", "error", err)
+				if shutdownErr := c.Shutdown(); shutdownErr != nil {
+					c.Logger().Error("failed to shutdown core", "error", shutdownErr)
+				}
+			}
+			return nil, err
 		}
 	}
 	return nil, nil
@@ -1483,13 +1496,8 @@ func (c *Core) setupMounts(ctx context.Context) error {
 			// don't set the running version to a builtin if it is running as an external plugin
 			if externaler, ok := backend.(logical.Externaler); !ok || !externaler.IsExternal() {
 				entry.RunningVersion = versions.GetBuiltinVersion(consts.PluginTypeSecrets, entry.Type)
-				_, err := c.handleDeprecatedMountEntry(ctx, entry, consts.PluginTypeSecrets)
-				if err != nil {
-					c.logger.Error("shutting down core", "error", err)
-					if shutdownErr := c.Shutdown(); shutdownErr != nil {
-						c.Logger().Error("failed to shutdown core", "error", shutdownErr)
-					}
-					return err
+				if _, err := c.handleDeprecatedMountEntry(ctx, entry, consts.PluginTypeSecrets, isNonPatchUpdate); err != nil {
+					goto ROUTER_MOUNT
 				}
 			}
 		}
