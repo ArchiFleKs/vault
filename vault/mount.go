@@ -1497,6 +1497,7 @@ func (c *Core) setupMounts(ctx context.Context) error {
 			if externaler, ok := backend.(logical.Externaler); !ok || !externaler.IsExternal() {
 				entry.RunningVersion = versions.GetBuiltinVersion(consts.PluginTypeSecrets, entry.Type)
 				if _, err := c.handleDeprecatedMountEntry(ctx, entry, consts.PluginTypeSecrets, c.isNonPatchUpdate); err != nil {
+					c.logger.Warn("skipping plugin-based mount entry", "path", entry.Path)
 					goto ROUTER_MOUNT
 				}
 			}
