@@ -2135,6 +2135,9 @@ func (c *Core) sealInternalWithOptions(grabStateLock, keepHALock, performCleanup
 		c.stopClusterListener()
 	}
 
+	c.logger.Debug("unsetting the non-patch-version update flag")
+	c.isNonPatchUpdate = false
+
 	c.logger.Debug("sealing barrier")
 	if err := c.barrier.Seal(); err != nil {
 		c.logger.Error("error sealing barrier", "error", err)

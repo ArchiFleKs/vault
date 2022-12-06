@@ -76,6 +76,33 @@ func TestCore_HasVaultVersion(t *testing.T) {
 	}
 }
 
+func TestCore_Unseal_IsNonPatchVersionUpdate(t *testing.T) {
+	c, keys, root := TestCoreUnsealed(t)
+	if c.versionHistory == nil {
+		t.Fatalf("Version timestamps for core were not initialized for a new core")
+	}
+
+	if !c.isNonPatchUpdate {
+		t.Fatalf("expected non-patch-version update")
+	}
+
+	c.Seal(root)
+
+	for i, key := range keys {
+		unseal, err := TestCoreUnseal(c, key)
+		if err != nil {
+			t.Fatalf("err: %v", err)
+		}
+		if i+1 == len(keys) && !unseal {
+			t.Fatalf("err: should be unsealed")
+		}
+	}
+
+	if c.isNonPatchUpdate {
+		t.Fatalf("expected non-patch-version update bool to be unset")
+	}
+}
+
 func TestCore_Unseal_MultiShare(t *testing.T) {
 	c := TestCore(t)
 
