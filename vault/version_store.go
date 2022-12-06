@@ -88,6 +88,8 @@ func (c *Core) storeMountedVersionEntry(ctx context.Context, vaultVersion *Vault
 	if err := c.barrier.Put(ctx, newEntry); err != nil {
 		return fmt.Errorf("could not store latest mounted version: %w", err)
 	}
+	// Update the cached version history with the last mounted version
+	c.versionHistory[lastMountedVersionKey] = *vaultVersion
 	return nil
 }
 

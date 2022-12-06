@@ -1220,32 +1220,30 @@ func (c *Core) handleVersionTimeStamps(ctx context.Context) error {
 
 	// Inform Vault of a non-patch (major or minor) version update for
 	// Deprecation handling purposes
-	if isUpdated {
-		lastMountedVersion, ok := c.versionHistory[lastMountedVersionKey]
-		if ok {
-			// Get versions into comparable form
-			curr, err := semver.NewSemver(c.currentVaultVersion.Version)
-			if err != nil {
-				return fmt.Errorf("could not determine update status: %w", err)
-			}
-			prev, err := semver.NewSemver(lastMountedVersion.Version)
-			if err != nil {
-				return fmt.Errorf("could not determine update status: %w", err)
-			}
+	lastMountedVersion, ok := c.versionHistory[lastMountedVersionKey]
+	if ok {
+		// Get versions into comparable form
+		curr, err := semver.NewSemver(c.currentVaultVersion.Version)
+		if err != nil {
+			return fmt.Errorf("could not determine update status: %w", err)
+		}
+		prev, err := semver.NewSemver(lastMountedVersion.Version)
+		if err != nil {
+			return fmt.Errorf("could not determine update status: %w", err)
+		}
 
-			// Check for major version upgrade
-			if curr.Segments()[0] > prev.Segments()[0] {
-				c.isNonPatchUpdate = true
-			}
-
-			// Check for minor version upgrade
-			if curr.Segments()[1] > prev.Segments()[1] {
-				c.isNonPatchUpdate = true
-			}
-		} else {
-			// First version in history, so technically an update
+		// Check for major version upgrade
+		if curr.Segments()[0] > prev.Segments()[0] {
 			c.isNonPatchUpdate = true
 		}
+
+		// Check for minor version upgrade
+		if curr.Segments()[1] > prev.Segments()[1] {
+			c.isNonPatchUpdate = true
+		}
+	} else {
+		// First version in history, so technically an update
+		c.isNonPatchUpdate = true
 	}
 	return nil
 }

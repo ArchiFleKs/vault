@@ -140,3 +140,10 @@ func TestVersionStore_SelfHealUTC(t *testing.T) {
 		}
 	}
 }
+
+func TestVersionStore_StoreMountedVersionEntry(t *testing.T) {
+	c, _, _ := TestCoreUnsealed(t)
+	if *c.currentVaultVersion != c.versionHistory[lastMountedVersionKey] {
+		t.Fatalf("expected: %v, got: %v", *c.currentVaultVersion, c.versionHistory[lastMountedVersionKey])
+	}
+}
