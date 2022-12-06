@@ -151,7 +151,6 @@ var (
 	LicenseInitCheck             = func(*Core) error { return nil }
 	LicenseSummary               = func(*Core) (*LicenseState, error) { return nil, nil }
 	LicenseReload                = func(*Core) error { return nil }
-	isNonPatchUpdate             = false
 )
 
 // NonFatalError is an error that can be returned during NewCore that should be
@@ -647,6 +646,7 @@ type Core struct {
 	versionHistory       map[string]VaultVersion
 	currentVaultVersion  *VaultVersion
 	latestMountedVersion *VaultVersion
+	isNonPatchUpdate     bool
 
 	// effectiveSDKVersion contains the SDK version that standby nodes should use when
 	// heartbeating with the active node. Default to the current SDK version.
@@ -1236,16 +1236,16 @@ func (c *Core) handleVersionTimeStamps(ctx context.Context) error {
 
 			// Check for major version upgrade
 			if curr.Segments()[0] > prev.Segments()[0] {
-				isNonPatchUpdate = true
+				c.isNonPatchUpdate = true
 			}
 
 			// Check for minor version upgrade
 			if curr.Segments()[1] > prev.Segments()[1] {
-				isNonPatchUpdate = true
+				c.isNonPatchUpdate = true
 			}
 		} else {
 			// First version in history, so technically an update
-			isNonPatchUpdate = true
+			c.isNonPatchUpdate = true
 		}
 	}
 	return nil

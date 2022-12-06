@@ -817,7 +817,7 @@ func (c *Core) setupCredentials(ctx context.Context) error {
 			// don't set the running version to a builtin if it is running as an external plugin
 			if externaler, ok := backend.(logical.Externaler); !ok || !externaler.IsExternal() {
 				entry.RunningVersion = versions.GetBuiltinVersion(consts.PluginTypeCredential, entry.Type)
-				if _, err := c.handleDeprecatedMountEntry(ctx, entry, consts.PluginTypeCredential, isNonPatchUpdate); err != nil {
+				if _, err := c.handleDeprecatedMountEntry(ctx, entry, consts.PluginTypeCredential, c.isNonPatchUpdate); err != nil {
 					goto ROUTER_MOUNT
 				}
 			}

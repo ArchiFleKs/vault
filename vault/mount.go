@@ -1496,7 +1496,7 @@ func (c *Core) setupMounts(ctx context.Context) error {
 			// don't set the running version to a builtin if it is running as an external plugin
 			if externaler, ok := backend.(logical.Externaler); !ok || !externaler.IsExternal() {
 				entry.RunningVersion = versions.GetBuiltinVersion(consts.PluginTypeSecrets, entry.Type)
-				if _, err := c.handleDeprecatedMountEntry(ctx, entry, consts.PluginTypeSecrets, isNonPatchUpdate); err != nil {
+				if _, err := c.handleDeprecatedMountEntry(ctx, entry, consts.PluginTypeSecrets, c.isNonPatchUpdate); err != nil {
 					goto ROUTER_MOUNT
 				}
 			}
