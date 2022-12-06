@@ -643,10 +643,9 @@ type Core struct {
 	// was first run. Note that because perf standbys should be upgraded first, and
 	// only the active node will actually write the new version timestamp, a perf
 	// standby shouldn't rely on the stored version timestamps being present.
-	versionHistory       map[string]VaultVersion
-	currentVaultVersion  *VaultVersion
-	latestMountedVersion *VaultVersion
-	isNonPatchUpdate     bool
+	versionHistory      map[string]VaultVersion
+	currentVaultVersion *VaultVersion
+	isNonPatchUpdate    bool
 
 	// effectiveSDKVersion contains the SDK version that standby nodes should use when
 	// heartbeating with the active node. Default to the current SDK version.
