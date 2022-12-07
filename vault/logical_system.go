@@ -4831,6 +4831,10 @@ func (b *SystemBackend) handleVersionHistoryList(ctx context.Context, req *logic
 	respKeys := make([]string, 0)
 
 	for _, versionEntry := range b.Core.versionHistory {
+		// We can skip the last mounted version entry, as it's meant for internal purposes only
+		if versionEntry == b.Core.versionHistory[lastMountedVersionKey] {
+			continue
+		}
 		versions = append(versions, versionEntry)
 	}
 
