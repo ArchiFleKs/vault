@@ -12,6 +12,7 @@ import { filterVersionHistory, formatDateObject } from 'core/utils/client-count-
 import timestamp from 'core/utils/timestamp';
 
 import type AdapterError from '@ember-data/adapter';
+import type FlagsService from 'vault/services/flags';
 import type StoreService from 'vault/services/store';
 import type VersionService from 'vault/services/version';
 import type ClientsActivityModel from 'vault/models/clients/activity';
@@ -30,6 +31,7 @@ interface Args {
 }
 
 export default class ClientsCountsPageComponent extends Component<Args> {
+  @service declare readonly flags: FlagsService;
   @service declare readonly version: VersionService;
   @service declare readonly store: StoreService;
 
@@ -163,6 +165,12 @@ export default class ClientsCountsPageComponent extends Component<Args> {
         : this.activityForNamespace;
     }
     return activity?.total;
+  }
+
+  get hasSecretsSyncClients(): boolean {
+    const { activity } = this.args;
+    // if there is any sync client data, show it
+    return activity && activity?.total?.secret_syncs > 0;
   }
 
   @action

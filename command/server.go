@@ -135,6 +135,7 @@ type ServerCommand struct {
 	flagDevLatency         int
 	flagDevLatencyJitter   int
 	flagDevLeasedKV        bool
+	flagDevNoKV            bool
 	flagDevKVV1            bool
 	flagDevSkipInit        bool
 	flagDevThreeNode       bool
@@ -341,6 +342,13 @@ func (c *ServerCommand) Flags() *FlagSets {
 	f.BoolVar(&BoolVar{
 		Name:    "dev-leased-kv",
 		Target:  &c.flagDevLeasedKV,
+		Default: false,
+		Hidden:  true,
+	})
+
+	f.BoolVar(&BoolVar{
+		Name:    "dev-no-kv",
+		Target:  &c.flagDevNoKV,
 		Default: false,
 		Hidden:  true,
 	})
@@ -1031,7 +1039,7 @@ func (c *ServerCommand) Run(args []string) int {
 	}
 
 	// Automatically enable dev mode if other dev flags are provided.
-	if c.flagDevConsul || c.flagDevHA || c.flagDevTransactional || c.flagDevLeasedKV || c.flagDevThreeNode || c.flagDevFourCluster || c.flagDevAutoSeal || c.flagDevKVV1 || c.flagDevTLS {
+	if c.flagDevConsul || c.flagDevHA || c.flagDevTransactional || c.flagDevLeasedKV || c.flagDevThreeNode || c.flagDevFourCluster || c.flagDevAutoSeal || c.flagDevKVV1 || c.flagDevNoKV || c.flagDevTLS {
 		c.flagDev = true
 	}
 
@@ -1182,20 +1190,6 @@ func (c *ServerCommand) Run(args []string) int {
 				"in a Docker container, provide the IPC_LOCK cap to the container."))
 	}
 
-	inmemMetrics, metricSink, prometheusEnabled, err := configutil.SetupTelemetry(&configutil.SetupTelemetryOpts{
-		Config:      config.Telemetry,
-		Ui:          c.UI,
-		ServiceName: "vault",
-		DisplayName: "Vault",
-		UserAgent:   useragent.String(),
-		ClusterName: config.ClusterName,
-	})
-	if err != nil {
-		c.UI.Error(fmt.Sprintf("Error initializing telemetry: %s", err))
-		return 1
-	}
-	metricsHelper := metricsutil.NewMetricsHelper(inmemMetrics, prometheusEnabled)
-
 	// Initialize the storage backend
 	var backend physical.Backend
 	if !c.flagDev || config.Storage != nil {
@@ -1210,6 +1204,27 @@ func (c *ServerCommand) Run(args []string) int {
 			return 1
 		}
 	}
+
+	clusterName := config.ClusterName
+
+	// Attempt to retrieve cluster name from insecure storage
+	if clusterName == "" {
+		clusterName, err = c.readClusterNameFromInsecureStorage(backend)
+	}
+
+	inmemMetrics, metricSink, prometheusEnabled, err := configutil.SetupTelemetry(&configutil.SetupTelemetryOpts{
+		Config:      config.Telemetry,
+		Ui:          c.UI,
+		ServiceName: "vault",
+		DisplayName: "Vault",
+		UserAgent:   useragent.String(),
+		ClusterName: clusterName,
+	})
+	if err != nil {
+		c.UI.Error(fmt.Sprintf("Error initializing telemetry: %s", err))
+		return 1
+	}
+	metricsHelper := metricsutil.NewMetricsHelper(inmemMetrics, prometheusEnabled)
 
 	// Initialize the Service Discovery, if there is one
 	var configSR sr.ServiceRegistration
@@ -1669,6 +1684,8 @@ func (c *ServerCommand) Run(args []string) int {
 
 			core.ReloadRequestLimiter()
 
+			core.ReloadOverloadController()
+
 			// reloading HCP link
 			hcpLink, err = c.reloadHCPLink(hcpLink, config, core, hcpLogger)
 			if err != nil {
@@ -1685,7 +1702,16 @@ func (c *ServerCommand) Run(args []string) int {
 				}
 			}
 
-			if err := core.ReloadCensus(); err != nil {
+			// notify ServiceRegistration that a configuration reload has occurred
+			if sr := coreConfig.GetServiceRegistration(); sr != nil {
+				var srConfig *map[string]string
+				if config.ServiceRegistration != nil {
+					srConfig = &config.ServiceRegistration.Config
+				}
+				sr.NotifyConfigurationReload(srConfig)
+			}
+
+			if err := core.ReloadCensusManager(); err != nil {
 				c.UI.Error(err.Error())
 			}
 
@@ -1756,39 +1782,11 @@ func (c *ServerCommand) Run(args []string) int {
 			// into a state where it cannot process requests so we can get pprof outputs
 			// via SIGUSR2.
 			pprofPath := filepath.Join(os.TempDir(), "vault-pprof")
-			err := os.MkdirAll(pprofPath, os.ModePerm)
+			cpuProfileDuration := time.Second * 1
+			err := WritePprofToFile(pprofPath, cpuProfileDuration)
 			if err != nil {
-				c.logger.Error("Could not create temporary directory for pprof", "error", err)
+				c.logger.Error(err.Error())
 				continue
-			}
-
-			dumps := []string{"goroutine", "heap", "allocs", "threadcreate", "profile"}
-			for _, dump := range dumps {
-				pFile, err := os.Create(filepath.Join(pprofPath, dump))
-				if err != nil {
-					c.logger.Error("error creating pprof file", "name", dump, "error", err)
-					break
-				}
-
-				if dump != "profile" {
-					err = pprof.Lookup(dump).WriteTo(pFile, 0)
-					if err != nil {
-						c.logger.Error("error generating pprof data", "name", dump, "error", err)
-						pFile.Close()
-						break
-					}
-				} else {
-					// CPU profiles need to run for a duration so we're going to run it
-					// just for one second to avoid blocking here.
-					if err := pprof.StartCPUProfile(pFile); err != nil {
-						c.logger.Error("could not start CPU profile: ", err)
-						pFile.Close()
-						break
-					}
-					time.Sleep(time.Second * 1)
-					pprof.StopCPUProfile()
-				}
-				pFile.Close()
 			}
 
 			c.logger.Info(fmt.Sprintf("Wrote pprof files to: %s", pprofPath))
@@ -2087,29 +2085,31 @@ func (c *ServerCommand) enableDev(core *vault.Core, coreConfig *vault.CoreConfig
 		}
 	}
 
-	kvVer := "2"
-	if c.flagDevKVV1 || c.flagDevLeasedKV {
-		kvVer = "1"
-	}
-	req := &logical.Request{
-		Operation:   logical.UpdateOperation,
-		ClientToken: init.RootToken,
-		Path:        "sys/mounts/secret",
-		Data: map[string]interface{}{
-			"type":        "kv",
-			"path":        "secret/",
-			"description": "key/value secret storage",
-			"options": map[string]string{
-				"version": kvVer,
+	if !c.flagDevNoKV {
+		kvVer := "2"
+		if c.flagDevKVV1 || c.flagDevLeasedKV {
+			kvVer = "1"
+		}
+		req := &logical.Request{
+			Operation:   logical.UpdateOperation,
+			ClientToken: init.RootToken,
+			Path:        "sys/mounts/secret",
+			Data: map[string]interface{}{
+				"type":        "kv",
+				"path":        "secret/",
+				"description": "key/value secret storage",
+				"options": map[string]string{
+					"version": kvVer,
+				},
 			},
-		},
-	}
-	resp, err := core.HandleRequest(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("error creating default KV store: %w", err)
-	}
-	if resp.IsError() {
-		return nil, fmt.Errorf("failed to create default KV store: %w", resp.Error())
+		}
+		resp, err := core.HandleRequest(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("error creating default KV store: %w", err)
+		}
+		if resp.IsError() {
+			return nil, fmt.Errorf("failed to create default KV store: %w", resp.Error())
+		}
 	}
 
 	return init, nil
@@ -3313,7 +3313,7 @@ func initDevCore(c *ServerCommand, coreConfig *vault.CoreConfig, config *server.
 func startHttpServers(c *ServerCommand, core *vault.Core, config *server.Config, lns []listenerutil.Listener) error {
 	for _, ln := range lns {
 		if ln.Config == nil {
-			return fmt.Errorf("Found nil listener config after parsing")
+			return fmt.Errorf("found nil listener config after parsing")
 		}
 
 		if err := config2.IsValidListener(ln.Config); err != nil {
@@ -3517,6 +3517,32 @@ func (c *ServerCommand) reloadSeals(ctx context.Context, grabStateLock bool, cor
 	c.logger.Debug("seal configuration reloaded successfully")
 
 	return true, nil
+}
+
+// Attempt to read the cluster name from the insecure storage.
+func (c *ServerCommand) readClusterNameFromInsecureStorage(b physical.Backend) (string, error) {
+	ctx := context.Background()
+	entry, err := b.Get(ctx, "core/cluster/local/name")
+	if err != nil {
+		return "", err
+	}
+
+	var result map[string]interface{}
+	// Decode JSON data into the map
+
+	if entry != nil {
+		if err := jsonutil.DecodeJSON(entry.Value, &result); err != nil {
+			return "", fmt.Errorf("failed to decode JSON data: %w", err)
+		}
+	}
+
+	// Retrieve the value of the "name" field from the map
+	name, ok := result["name"].(string)
+	if !ok {
+		return "", fmt.Errorf("failed to extract name field from decoded JSON")
+	}
+
+	return name, nil
 }
 
 func SetStorageMigration(b physical.Backend, active bool) error {

@@ -19,46 +19,49 @@ import expectedAuthAttrs from 'vault/tests/helpers/openapi/expected-auth-attrs';
  * if it is not updated automatically or is a more involved feature request.
  * Marked as enterprise so it only runs periodically
  */
-module('Acceptance | OpenAPI provides expected attributes enterprise', function (hooks) {
-  setupApplicationTest(hooks);
-  hooks.beforeEach(function () {
-    this.pathHelp = this.owner.lookup('service:pathHelp');
-    this.store = this.owner.lookup('service:store');
-    return authPage.login();
-  });
-
-  // Secret engines that use OpenAPI
-  ['ssh', 'kmip', 'pki'].forEach(function (testCase) {
-    return module(`${testCase} engine`, function (hooks) {
-      hooks.beforeEach(async function () {
-        this.backend = `${testCase}-openapi`;
-        await runCmd(mountEngineCmd(testCase, this.backend), false);
-      });
-      hooks.afterEach(async function () {
-        await runCmd(deleteEngineCmd(this.backend), false);
-      });
-
-      secretEngineHelper(test, testCase);
+module(
+  'Acceptance | Heads up - backend param changes! Expected OpenAPI attributes enterprise',
+  function (hooks) {
+    setupApplicationTest(hooks);
+    hooks.beforeEach(function () {
+      this.pathHelp = this.owner.lookup('service:pathHelp');
+      this.store = this.owner.lookup('service:store');
+      return authPage.login();
     });
-  });
 
-  // All auth backends use OpenAPI except aws
-  ['azure', 'userpass', 'cert', 'gcp', 'github', 'jwt', 'kubernetes', 'ldap', 'okta', 'radius'].forEach(
-    function (testCase) {
-      return module(`${testCase} auth`, function (hooks) {
+    // Secret engines that use OpenAPI
+    ['ssh', 'kmip', 'pki'].forEach(function (testCase) {
+      return module(`${testCase} engine`, function (hooks) {
         hooks.beforeEach(async function () {
-          this.mount = `${testCase}-openapi`;
-          await runCmd(mountAuthCmd(testCase, this.mount), false);
+          this.backend = `${testCase}-openapi`;
+          await runCmd(mountEngineCmd(testCase, this.backend), false);
         });
         hooks.afterEach(async function () {
-          await runCmd(deleteAuthCmd(this.backend), false);
+          await runCmd(deleteEngineCmd(this.backend), false);
         });
 
-        authEngineHelper(test, testCase);
+        secretEngineHelper(test, testCase);
       });
-    }
-  );
-});
+    });
+
+    // All auth backends use OpenAPI except aws
+    ['azure', 'userpass', 'cert', 'gcp', 'github', 'jwt', 'kubernetes', 'ldap', 'okta', 'radius'].forEach(
+      function (testCase) {
+        return module(`${testCase} auth`, function (hooks) {
+          hooks.beforeEach(async function () {
+            this.mount = `${testCase}-openapi`;
+            await runCmd(mountAuthCmd(testCase, this.mount), false);
+          });
+          hooks.afterEach(async function () {
+            await runCmd(deleteAuthCmd(this.backend), false);
+          });
+
+          authEngineHelper(test, testCase);
+        });
+      }
+    );
+  }
+);
 
 function secretEngineHelper(test, secretEngine) {
   const engineData = expectedSecretAttrs[secretEngine];
@@ -73,7 +76,15 @@ function secretEngineHelper(test, secretEngine) {
       const helpUrl = model.getHelpUrl(this.backend);
       const result = await this.pathHelp.getProps(helpUrl, this.backend);
       const expected = engineData[modelName];
-      assert.deepEqual(result, expected, `getProps returns expected attributes for ${modelName}`);
+      // Expected values should be updated to match "actual" (result)
+      assert.deepEqual(
+        Object.keys(result).sort(),
+        Object.keys(expected).sort(),
+        `getProps returns expected attributes for ${modelName}`
+      );
+      Object.keys(expected).forEach((attrName) => {
+        assert.deepEqual(result[attrName], expected[attrName], `${attrName} attribute details match`);
+      });
     });
   });
 }
@@ -91,7 +102,14 @@ function authEngineHelper(test, authBackend) {
         const helpUrl = model.getHelpUrl(this.mount);
         const result = await this.pathHelp.getProps(helpUrl, this.mount);
         const expected = authData[itemName];
-        assert.deepEqual(result, expected, `getProps returns expected attributes for ${itemName}`);
+        assert.deepEqual(
+          Object.keys(result).sort(),
+          Object.keys(expected).sort(),
+          `getProps returns expected attributes for ${itemName}`
+        );
+        Object.keys(expected).forEach((attrName) => {
+          assert.propEqual(result[attrName], expected[attrName], `${attrName} attribute details match`);
+        });
       });
     } else {
       test.skip(`generated-${itemName}-${authBackend} model`, async function (assert) {
